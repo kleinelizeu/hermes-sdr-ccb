@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# 01-deteccao.sh — Pré-checagens e detecção do ambiente Hermes.
+# Define: MODO (docker|nativo), CONTAINER/COMPOSE_DIR/CONFIG_FILE/WEBHOOK_PY etc.
+
+VERSAO_TESTADA="0.15"   # versão do Hermes em que o wizard foi validado
+
+# Garante que estamos como root (Hermes nativo vive em /root; Docker precisa de socket).
+checar_root() {
+  if [[ "$(id -u)" -ne 0 ]]; then
+    erro "Este assistente precisa rodar como root."
+    dica "Tenta de novo assim:  sudo bash $0"
+    return 1
+  fi
+}
+
+# Garante dependências básicas; oferece instalar via apt se faltar.
+checar_dependencias() {
+  local faltando=()
+  for cmd in curl openssl python3 grep sed; do
+    command -v "$cmd" >/dev/null 2>&1 || faltando+=("$cmd")
+  done
+  if (( ${#faltando[@]} == 0 )); then
+    ok "Ferramentas básicas presentes."
+    return 0
+  fi
+  dica "Faltam algumas ferramentas: ${faltando[*]}"
+  if command -v apt-get >/dev/null 2>&1 && confirmar "Posso instalá-las agora?" s; then
+    apt-get update -y >/dev/null 2>&1
+    apt-get install -y "${faltando[@]}" >/dev/null 2>&1
+    ok "Instaladas."
+  else
+    erro "Sem essas ferramentas não dá pra continuar."
+    return 1
+  fi
+}
+
+# Detecta Docker (container hermes-agent) ou instalação nativa.
+detectar_hermes() {
+  local achou_docker="" achou_nativo=""
+
+  if command -v docker >/dev/null 2>&1; then
+    CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -m1 hermes-agent || true)"
+    [[ -n "${CONTAINER:-}" ]] && achou_docker="1"
+  fi
+  [[ -d /usr/local/lib/hermes-agent ]] && command -v hermes >/dev/null 2>&1 && achou_nativo="1"
+
+  if [[ -n "$achou_docker" && -n "$achou_nativo" ]]; then
+    titulo "Encontrei o Hermes nas duas formas (Docker e instalação nativa)."
+    info "1) Docker (container: $CONTAINER)"
+    info "2) Nativo (systemd)"
+    local op; MENU_MAX=2
+    perguntar op "Qual você usa para este agente? (1 ou 2)" valida_opcao_menu "Digite 1 ou 2."
+    [[ "$op" == "1" ]] && achou_nativo="" || achou_docker=""
+  fi
+
+  if [[ -n "$achou_docker" ]]; then
+    _detectar_docker
+  elif [[ -n "$achou_nativo" ]]; then
+    _detectar_nativo
+  else
+    erro "Não encontrei o Hermes nesta VPS."
+    dica "Instale o Hermes primeiro (material da CCB) e rode este assistente de novo."
+    return 1
+  fi
+}
+
+_detectar_docker() {
+  salvar_var MODO "docker"
+  salvar_var CONTAINER "$CONTAINER"
+
+  COMPOSE_DIR="$(docker inspect "$CONTAINER" \
+    --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' 2>/dev/null || true)"
+  if [[ ! -d "$COMPOSE_DIR" ]]; then
+    erro "Não consegui localizar a pasta do docker-compose do container $CONTAINER."
+    return 1
+  fi
+  salvar_var COMPOSE_DIR "$COMPOSE_DIR"
+  salvar_var COMPOSE_FILE "$COMPOSE_DIR/docker-compose.yml"
+  salvar_var CONFIG_FILE  "$COMPOSE_DIR/data/config.yaml"
+  salvar_var ENV_FILE     "$COMPOSE_DIR/.env"
+  salvar_var DATA_DIR     "$COMPOSE_DIR/data"
+  salvar_var WEBHOOK_PY   "/opt/hermes/gateway/platforms/webhook.py"  # caminho DENTRO do container
+  salvar_var WEBHOOK_HOST "0.0.0.0"
+
+  ok "Hermes em Docker detectado."
+  info "Container: $CONTAINER"
+  info "Pasta do compose: $COMPOSE_DIR"
+  _checar_versao
+}
+
+_detectar_nativo() {
+  salvar_var MODO "nativo"
+  salvar_var HERMES_LIB "/usr/local/lib/hermes-agent"
+  salvar_var WEBHOOK_PY "/usr/local/lib/hermes-agent/gateway/platforms/webhook.py"
+  salvar_var WEBHOOK_HOST "127.0.0.1"
+  ok "Hermes nativo (systemd) detectado."
+  info "Código: /usr/local/lib/hermes-agent"
+  _checar_versao
+}
+
+_checar_versao() {
+  local v
+  v="$(hermes --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1 || true)"
+  [[ -z "$v" && "${MODO:-}" == "docker" ]] && \
+    v="$(docker exec "$CONTAINER" hermes --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1 || true)"
+  if [[ -n "$v" ]]; then
+    salvar_var HERMES_VERSAO "$v"
+    info "Versão do Hermes: $v"
+    if [[ "$v" != ${VERSAO_TESTADA}* ]]; then
+      dica "Este assistente foi testado na versão ${VERSAO_TESTADA}.x. A sua é diferente — pode haver pequenas diferenças."
+      confirmar "Quer continuar mesmo assim?" s || { erro "Ok, parando aqui."; return 1; }
+    fi
+  else
+    dica "Não consegui descobrir a versão do Hermes — vou seguir assim mesmo."
+  fi
+}
+
+# Passo agregador chamado pelo orquestrador.
+passo_precheck() {
+  passo "PREPARANDO — verificando seu servidor"
+  checar_root          || return 1
+  checar_dependencias  || return 1
+  detectar_hermes      || return 1
+}

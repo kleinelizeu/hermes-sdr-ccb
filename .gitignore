@@ -1,0 +1,4 @@
+# Estado e segredos ficam fora do repo (vivem em /root/.hermes-sdr-ccb na VPS)
+*.bak.*
+*.local
+.DS_Store
