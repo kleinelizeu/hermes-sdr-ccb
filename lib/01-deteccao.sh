@@ -140,10 +140,30 @@ _checar_versao() {
   fi
 }
 
+# Avisa se o Hermes ainda não tem um modelo de IA configurado.
+# O agente SDR clona o perfil ativo; sem modelo, ele não consegue responder.
+checar_modelo() {
+  local saida modelo
+  saida="$(hermes_cli status 2>/dev/null || true)"
+  modelo="$(echo "$saida" | grep -iE '^[[:space:]]*Model:' | head -1)"
+  if [[ -z "$modelo" ]] || echo "$modelo" | grep -qiE 'not set|nao set|—|\(none\)'; then
+    dica "O seu Hermes ainda NÃO tem um modelo de IA configurado."
+    info "Sem isso, o agente liga, mas não consegue pensar nem responder."
+    caixa "Antes, configure o cérebro do agente com:" \
+          "    hermes setup" \
+          "(escolha um provedor de IA e cole a chave, ex.: OpenRouter)"
+    confirmar "Já configurei o modelo (ou quero continuar assim mesmo)?" s \
+      || { erro "Tudo bem — rode 'hermes setup' e depois 'hermes-sdr' de novo."; return 1; }
+  else
+    ok "Modelo de IA configurado."
+  fi
+}
+
 # Passo agregador chamado pelo orquestrador.
 passo_precheck() {
   passo "PREPARANDO — verificando seu servidor"
   checar_root          || return 1
   checar_dependencias  || return 1
   detectar_hermes      || return 1
+  checar_modelo        || return 1
 }

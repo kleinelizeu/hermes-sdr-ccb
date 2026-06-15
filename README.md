@@ -12,8 +12,9 @@ Este é um assistente (wizard) de instalação feito para a **Comunidade Claw Br
 ## Pré-requisitos
 
 1. Uma **VPS** (servidor) com o **Hermes Agent já instalado** — em Docker **ou** instalação nativa. (Se ainda não instalou, veja o material da CCB.)
-2. **Telegram** no celular.
-3. Uma conta no **Zernio** (zernio.com) com o seu **Instagram conectado**.
+2. O Hermes com um **modelo de IA configurado** (rode `hermes setup` e cole a chave de um provedor, ex.: OpenRouter). Sem isso o agente liga, mas não consegue responder.
+3. **Telegram** no celular.
+4. Uma conta no **Zernio** (zernio.com) com o seu **Instagram conectado**.
 
 ---
 
