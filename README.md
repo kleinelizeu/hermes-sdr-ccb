@@ -23,10 +23,8 @@ Este é um assistente (wizard) de instalação feito para a **Comunidade Claw Br
 Conecte na sua VPS por SSH e cole:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/SEU-USUARIO/hermes-sdr-ccb/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/kleinelizeu/hermes-sdr-ccb/main/install.sh | sudo bash
 ```
-
-> Troque `SEU-USUARIO` pelo dono do repositório no GitHub.
 
 O assistente abre sozinho e vai te guiando. Quando terminar, dá pra rodar de novo a qualquer momento com:
 
@@ -40,7 +38,7 @@ hermes-sdr contexto   # mostra o texto do seu negócio para colar no bot
 ### Alternativa (sem o one-liner)
 
 ```bash
-git clone https://github.com/SEU-USUARIO/hermes-sdr-ccb.git /opt/hermes-sdr-ccb
+git clone https://github.com/kleinelizeu/hermes-sdr-ccb.git /opt/hermes-sdr-ccb
 sudo bash /opt/hermes-sdr-ccb/instalar.sh
 ```
 

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # install.sh — Bootstrap do "Hermes SDR by CCB".
 # Uso (one-liner):
-#   curl -fsSL https://raw.githubusercontent.com/SEU-USUARIO/hermes-sdr-ccb/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/kleinelizeu/hermes-sdr-ccb/main/install.sh | bash
 #
 # Clona/atualiza o repositório, cria o comando global 'hermes-sdr' e abre o assistente.
 set -euo pipefail
 
-REPO_URL="${HERMES_SDR_REPO:-https://github.com/SEU-USUARIO/hermes-sdr-ccb.git}"
+REPO_URL="${HERMES_SDR_REPO:-https://github.com/kleinelizeu/hermes-sdr-ccb.git}"
 DEST="${HERMES_SDR_DEST:-/opt/hermes-sdr-ccb}"
 
 c_ok()  { printf '\033[32m✔\033[0m %s\n' "$*"; }
