@@ -10,6 +10,7 @@ _bad()  { printf '  %s✘%s %s\n' "$C_VERM"  "$C_RESET" "$*"; DOC_FALHAS=$((DOC_
 
 rodar_doctor() {
   carregar_estado
+  type _localizar_hermes >/dev/null 2>&1 && { _localizar_hermes 2>/dev/null || true; }
   titulo "DIAGNÓSTICO — conferindo se está tudo no lugar"
   DOC_FALHAS=0
 
@@ -47,7 +48,9 @@ check_hermes() {
     CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -m1 hermes-agent || true)"
     [[ -n "$CONTAINER" ]] && _chk "Hermes (Docker) rodando: $CONTAINER" || _bad "Container do Hermes não está rodando."
   elif [[ "${MODO:-}" == "nativo" ]]; then
-    [[ -d /usr/local/lib/hermes-agent ]] && _chk "Hermes (nativo) instalado." || _bad "Não encontrei o Hermes nativo."
+    if command -v hermes >/dev/null 2>&1 || [[ -d "${HERMES_LIB:-/dev/null}" ]]; then
+      _chk "Hermes (nativo) instalado."
+    else _bad "Não encontrei o Hermes nativo."; fi
   else
     _bad "Ambiente do Hermes não detectado (rode o assistente: hermes-sdr)."
   fi

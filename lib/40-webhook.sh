@@ -27,17 +27,15 @@ passo_webhook() {
 }
 
 # Insere o bloco platforms.webhook no config.yaml (idempotente).
+# Cria o arquivo se ele ainda não existir (no Hermes v0.16 o perfil pode não ter config.yaml).
 _habilitar_plataforma_webhook() {
   local cfg="$CONFIG_FILE"
-  if [[ ! -f "$cfg" ]]; then
-    erro "Não encontrei o config.yaml do agente em: $cfg"
-    return 1
-  fi
-  if grep -qE '^[[:space:]]+webhook:' "$cfg"; then
+  if [[ -f "$cfg" ]] && grep -qE '^[[:space:]]+webhook:' "$cfg"; then
     ok "Plataforma de webhook já estava habilitada."
     return 0
   fi
-  backup_arquivo "$cfg"
+  mkdir -p "$(dirname "$cfg")"
+  [[ -f "$cfg" ]] && backup_arquivo "$cfg"
   WEBHOOK_HOST="${WEBHOOK_HOST:-127.0.0.1}" WEBHOOK_PORT="$WEBHOOK_PORT" \
   WEBHOOK_SECRET="$WEBHOOK_SECRET" python3 - "$cfg" <<'PY'
 import os, sys
@@ -47,13 +45,20 @@ bloco = (
     "  webhook:\n"
     "    enabled: true\n"
     "    extra:\n"
-    f"      host: {host}\n"
+    f'      host: "{host}"\n'
     f"      port: {port}\n"
-    f"      secret: {secret}\n"
+    f'      secret: "{secret}"\n'
 )
-src = open(path, encoding="utf-8").read()
-if "\nplatforms:\n" in src:
+try:
+    src = open(path, encoding="utf-8").read()
+except FileNotFoundError:
+    src = ""
+if not src.strip():
+    src = "platforms:\n" + bloco
+elif "\nplatforms:\n" in src:
     src = src.replace("\nplatforms:\n", "\nplatforms:\n" + bloco, 1)
+elif src.startswith("platforms:\n"):
+    src = src.replace("platforms:\n", "platforms:\n" + bloco, 1)
 else:
     src = src.rstrip() + "\n\nplatforms:\n" + bloco
 open(path, "w", encoding="utf-8").write(src)
@@ -87,7 +92,7 @@ _aplicar_patch_assinatura() {
     HERMES_WEBHOOK_PY="$WEBHOOK_PY" python3 "$patch_src" "$WEBHOOK_PY" >/dev/null 2>&1 || true
     if grep -q "X-Zernio-Signature" "$WEBHOOK_PY" 2>/dev/null; then
       ok "Reconhecimento da assinatura do Zernio aplicado."
-      systemctl restart "$GATEWAY_SVC" 2>/dev/null || true
+      [[ -n "${GATEWAY_SVC:-}" ]] && systemctl restart "$GATEWAY_SVC" 2>/dev/null || true
     else
       dica "Não consegui aplicar o patch de assinatura automaticamente — o doctor tenta de novo."
     fi

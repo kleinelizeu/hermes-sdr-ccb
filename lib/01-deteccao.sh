@@ -2,7 +2,7 @@
 # 01-deteccao.sh — Pré-checagens e detecção do ambiente Hermes.
 # Define: MODO (docker|nativo), CONTAINER/COMPOSE_DIR/CONFIG_FILE/WEBHOOK_PY etc.
 
-VERSAO_TESTADA="0.15"   # versão do Hermes em que o wizard foi validado
+VERSAO_TESTADA="0.16"   # versão do Hermes em que o wizard foi validado
 
 # Garante que estamos como root (Hermes nativo vive em /root; Docker precisa de socket).
 checar_root() {
@@ -34,6 +34,20 @@ checar_dependencias() {
   fi
 }
 
+# Garante que o comando 'hermes' esteja no PATH (root não-interativo costuma
+# não ter ~/.local/bin). Retorna 0 se encontrou.
+_localizar_hermes() {
+  command -v hermes >/dev/null 2>&1 && return 0
+  local c
+  for c in "$HOME/.local/bin/hermes" /root/.local/bin/hermes /usr/local/bin/hermes; do
+    if [[ -x "$c" ]]; then
+      export PATH="$(dirname "$c"):$PATH"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Detecta Docker (container hermes-agent) ou instalação nativa.
 detectar_hermes() {
   local achou_docker="" achou_nativo=""
@@ -42,7 +56,7 @@ detectar_hermes() {
     CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -m1 hermes-agent || true)"
     [[ -n "${CONTAINER:-}" ]] && achou_docker="1"
   fi
-  [[ -d /usr/local/lib/hermes-agent ]] && command -v hermes >/dev/null 2>&1 && achou_nativo="1"
+  _localizar_hermes && achou_nativo="1"
 
   if [[ -n "$achou_docker" && -n "$achou_nativo" ]]; then
     titulo "Encontrei o Hermes nas duas formas (Docker e instalação nativa)."
@@ -90,11 +104,22 @@ _detectar_docker() {
 
 _detectar_nativo() {
   salvar_var MODO "nativo"
-  salvar_var HERMES_LIB "/usr/local/lib/hermes-agent"
-  salvar_var WEBHOOK_PY "/usr/local/lib/hermes-agent/gateway/platforms/webhook.py"
+  # O código pode estar em /usr/local/lib/hermes-agent (instalador) ou no clone
+  # do git (ex.: /root/hermes-agent). Descobrimos pelo "Project:" do --version
+  # e, como reserva, resolvendo o symlink do comando hermes.
+  local proj=""
+  proj="$(hermes --version 2>/dev/null | grep -iE '^Project:' | awk '{print $2}' | head -1 || true)"
+  if [[ -z "$proj" || ! -d "$proj" ]]; then
+    local real; real="$(readlink -f "$(command -v hermes)" 2>/dev/null || true)"
+    # .../<projeto>/venv/bin/hermes -> sobe 3 níveis
+    [[ -n "$real" ]] && proj="$(cd "$(dirname "$real")/../.." 2>/dev/null && pwd || true)"
+  fi
+  [[ -d "$proj" ]] || proj="/usr/local/lib/hermes-agent"
+  salvar_var HERMES_LIB "$proj"
+  salvar_var WEBHOOK_PY "$proj/gateway/platforms/webhook.py"
   salvar_var WEBHOOK_HOST "127.0.0.1"
-  ok "Hermes nativo (systemd) detectado."
-  info "Código: /usr/local/lib/hermes-agent"
+  ok "Hermes nativo detectado."
+  info "Código: $proj"
   _checar_versao
 }
 

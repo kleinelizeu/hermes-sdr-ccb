@@ -70,30 +70,18 @@ passo_perfil() {
   _instalar_servico_nativo
 }
 
-# Sobrescreve o token/chat-id do Telegram no perfil (corrige o vazamento do --clone).
+# Escreve o token/IDs do Telegram no .env do perfil (corrige o vazamento do --clone).
+# Usa os nomes de variáveis oficiais do Hermes (v0.16):
+#   TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USERS, TELEGRAM_HOME_CHANNEL
 _reconfigurar_telegram_nativo() {
   local env="$ENV_FILE"
-  if [[ ! -f "$env" ]]; then
-    dica "Não achei o arquivo de configuração do perfil; vou usar o assistente do Hermes."
-    _setup_gateway_interativo
-    return
-  fi
+  [[ -f "$env" ]] || { touch "$env"; chmod 600 "$env"; }
   backup_arquivo "$env"
-
-  # Detecta a chave do token (varia: TELEGRAM_BOT_TOKEN / TELEGRAM_TOKEN / ...).
-  local chave_token chave_chat
-  chave_token="$(grep -oiE '^[A-Z_]*TELEGRAM[A-Z_]*TOKEN' "$env" | head -1 || true)"
-  chave_chat="$(grep -oiE '^[A-Z_]*TELEGRAM[A-Z_]*(CHAT_?ID|USER_?ID|OWNER)' "$env" | head -1 || true)"
-
-  if [[ -n "$chave_token" ]]; then
-    _set_env_var "$env" "$chave_token" "$TELEGRAM_BOT_TOKEN"
-    [[ -n "$chave_chat" ]] && _set_env_var "$env" "$chave_chat" "$TELEGRAM_CHAT_ID"
-    ok "Token do Telegram do agente atualizado para o seu bot novo."
-    _avisar_outros_tokens "$env"
-  else
-    dica "Não reconheci o formato do arquivo — vou abrir o assistente do Hermes (é só seguir as perguntas)."
-    _setup_gateway_interativo
-  fi
+  _set_env_var "$env" "TELEGRAM_BOT_TOKEN"      "$TELEGRAM_BOT_TOKEN"
+  _set_env_var "$env" "TELEGRAM_ALLOWED_USERS"  "$TELEGRAM_CHAT_ID"
+  _set_env_var "$env" "TELEGRAM_HOME_CHANNEL"   "$TELEGRAM_CHAT_ID"
+  ok "Telegram do agente configurado com o seu bot novo (@${BOT_USERNAME:-?})."
+  _avisar_outros_tokens "$env"
 }
 
 # _set_env_var arquivo CHAVE valor — substitui ou adiciona CHAVE=valor.
@@ -115,39 +103,41 @@ _avisar_outros_tokens() {
   fi
 }
 
-_setup_gateway_interativo() {
-  caixa "ATENÇÃO: o assistente do Hermes vai abrir." \
-        "Quando ele perguntar do Telegram, use:" \
-        "  Token:   o do seu bot novo (@${BOT_USERNAME:-seu_bot})" \
-        "  Seu ID:  ${TELEGRAM_CHAT_ID:-seu numero}"
-  confirmar "Pronto pra abrir o assistente?" s || return 0
-  "$PERFIL_BIN" setup gateway </dev/tty || hermes setup gateway </dev/tty || true
+# Instala o serviço do gateway (liga no boot) e descobre o nome real do unit.
+_instalar_servico_nativo() {
+  local svc
+  svc="$(_descobrir_unit)"
+  if [[ -z "$svc" ]]; then
+    info "Instalando o serviço que mantém o agente ligado..."
+    # --run-as-user root: VPS de aluno roda como root (containers/LXC).
+    # 'yes |' responde os prompts (instalar agora? iniciar no boot?).
+    yes | "$PERFIL_BIN" gateway install --system --run-as-user root >/dev/null 2>&1 || true
+    svc="$(_descobrir_unit)"
+  fi
+  if [[ -n "$svc" ]]; then
+    salvar_var GATEWAY_SVC "$svc"
+    systemctl restart "$svc" 2>/dev/null || systemctl start "$svc" 2>/dev/null || true
+    ok "Agente ligado (serviço: $svc)."
+  else
+    dica "Não consegui instalar o serviço automaticamente."
+    dica "Rode manualmente:  $PERFIL_BIN gateway install --system --run-as-user root"
+  fi
 }
 
-_instalar_servico_nativo() {
-  if systemctl list-unit-files 2>/dev/null | grep -q "^${GATEWAY_SVC}"; then
-    systemctl restart "$GATEWAY_SVC" 2>/dev/null || true
-    ok "Serviço do agente reiniciado."
-  else
-    dica "O serviço que mantém o agente ligado ainda não existe."
-    dica "No assistente do Hermes, escolha 'System service (starts on boot)' rodando como root."
-    _setup_gateway_interativo
-  fi
+# Localiza o unit systemd do gateway deste perfil (nome varia entre versões).
+_descobrir_unit() {
+  systemctl list-unit-files 2>/dev/null \
+    | grep -oE "hermes[a-z-]*gateway[a-z-]*${PERFIL}[a-z-]*\.service|hermes[a-z-]*${PERFIL}[a-z-]*\.service" \
+    | head -1
 }
 
 # Docker: garante que o token do Telegram do container é o do aluno.
 _configurar_telegram_docker() {
   local env="$ENV_FILE"
-  [[ -f "$env" ]] || { dica "Configure o Telegram pelo painel do seu Hermes."; return 0; }
+  [[ -f "$env" ]] || { touch "$env"; }
   backup_arquivo "$env"
-  local chave_token chave_chat
-  chave_token="$(grep -oiE '^[A-Z_]*TELEGRAM[A-Z_]*TOKEN' "$env" | head -1 || true)"
-  chave_chat="$(grep -oiE '^[A-Z_]*TELEGRAM[A-Z_]*(CHAT_?ID|USER_?ID|OWNER)' "$env" | head -1 || true)"
-  if [[ -n "$chave_token" ]]; then
-    _set_env_var "$env" "$chave_token" "$TELEGRAM_BOT_TOKEN"
-    [[ -n "$chave_chat" ]] && _set_env_var "$env" "$chave_chat" "$TELEGRAM_CHAT_ID"
-    ok "Token do Telegram atualizado no container (vai valer após o restart)."
-  else
-    dica "Configure o token do Telegram no .env do seu compose, se ainda não estiver."
-  fi
+  _set_env_var "$env" "TELEGRAM_BOT_TOKEN"     "$TELEGRAM_BOT_TOKEN"
+  _set_env_var "$env" "TELEGRAM_ALLOWED_USERS" "$TELEGRAM_CHAT_ID"
+  _set_env_var "$env" "TELEGRAM_HOME_CHANNEL"  "$TELEGRAM_CHAT_ID"
+  ok "Telegram configurado no container (vale após o restart)."
 }

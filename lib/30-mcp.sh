@@ -12,18 +12,20 @@ passo_mcp() {
     return 0
   fi
 
-  # A CLI tem 'mcp add'? (varia entre versões)
+  # Tentativa automática (best-effort). O 'mcp add' do Hermes é "discovery-first"
+  # e pode pedir confirmação; alimentamos 'yes' e, se não registrar, caímos no
+  # caminho manual (comprovado) sem travar.
   if hermes_cli mcp --help 2>/dev/null | grep -q ' add'; then
-    info "Registrando o Zernio automaticamente..."
-    if hermes_cli mcp add zernio -- npx -y mcp-remote@latest "$MCP_URL" \
-         --header "Authorization: Bearer $ZERNIO_API_KEY" >/dev/null 2>&1; then
+    info "Tentando conectar o Zernio automaticamente..."
+    # --args precisa ser a ÚLTIMA opção; o header vai como um único argumento.
+    yes 2>/dev/null | hermes_cli mcp add zernio --command npx \
+         --args -y mcp-remote@latest "$MCP_URL" --header "Authorization: Bearer $ZERNIO_API_KEY" >/dev/null 2>&1 || true
+    if _mcp_ja_registrado; then
       _reiniciar_gateway
-      if _mcp_ja_registrado; then
-        ok "Zernio conectado!"
-        return 0
-      fi
+      ok "Zernio conectado!"
+      return 0
     fi
-    dica "A conexão automática não confirmou — vamos pelo jeito manual (rápido)."
+    dica "A conexão automática não confirmou — vamos pelo jeito manual (é rápido)."
   fi
 
   _mcp_manual
