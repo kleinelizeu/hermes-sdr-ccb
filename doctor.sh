@@ -2,7 +2,7 @@
 # doctor.sh — Diagnóstico standalone do Hermes SDR by CCB.
 # Atalho para: instalar.sh doctor
 set -euo pipefail
-BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BASE_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 for f in "$BASE_DIR"/lib/*.sh; do source "$f"; done
 init_estado
 carregar_estado

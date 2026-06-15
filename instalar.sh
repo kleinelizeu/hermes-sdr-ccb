@@ -7,7 +7,8 @@
 #       bash instalar.sh contexto    (reimprime o contexto do negócio p/ colar no bot)
 set -euo pipefail
 
-BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve symlinks (o comando 'hermes-sdr' costuma ser um symlink em /usr/local/bin).
+BASE_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 for f in "$BASE_DIR"/lib/*.sh; do source "$f"; done
 
 # ── Subcomandos rápidos ───────────────────────────────────────────────────────
