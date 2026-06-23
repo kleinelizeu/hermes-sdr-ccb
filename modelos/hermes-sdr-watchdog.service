@@ -1,0 +1,10 @@
+[Unit]
+Description=Vigia do webhook do Hermes SDR (detecta queda e reconecta sozinho)
+After=network-online.target cloudflared-sdr.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# O caminho real é injetado pelo instalador (substitui __WATCHDOG_BIN__).
+ExecStart=__WATCHDOG_BIN__
+User=root

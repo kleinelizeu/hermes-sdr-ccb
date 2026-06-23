@@ -65,6 +65,16 @@ sudo bash /opt/hermes-sdr-ccb/instalar.sh
 
 **Testei comentando no meu próprio Instagram e não respondeu.** Isso é normal: o Zernio só dispara para interações de **outra** pessoa. Teste de outra conta.
 
-**As respostas pararam de funcionar.** Rode `hermes-sdr doctor` — ele costuma detectar e corrigir (inclusive quando o endereço do webhook muda).
+**As respostas pararam de funcionar.** No modo nativo, um **vigia automático** verifica o webhook a cada minuto e **religa sozinho** se a conexão do túnel cair (registrando tudo em `/var/log/hermes-sdr-webhook.log` e avisando no Telegram se o endereço mudar). Se ainda assim persistir, rode `hermes-sdr doctor`.
 
 Mais detalhes em [docs/COMO-FUNCIONA.md](docs/COMO-FUNCIONA.md) e [docs/PROBLEMAS-COMUNS.md](docs/PROBLEMAS-COMUNS.md).
+
+---
+
+## Para quem desenvolve
+
+Rodar a suíte de testes (não precisa de VPS nem de root — usa dublês):
+
+```bash
+bash tests/run.sh
+```

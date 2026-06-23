@@ -30,6 +30,7 @@ rodar_doctor() {
   check_rota
   check_prompt_raw
   check_exposicao
+  check_watchdog
   check_post_assinado
   check_mcp
 
@@ -166,6 +167,14 @@ check_exposicao() {
     [[ -n "${WEBHOOK_URL:-}" ]] && _chk "Endereço público: $WEBHOOK_URL" || _bad "Endereço público não definido."
     return
   fi
+  # Garante (uma única vez, em instalações antigas) que o túnel exponha o /ready,
+  # de que o vigia depende para detectar a queda silenciosa.
+  local unit="/etc/systemd/system/cloudflared-sdr.service"
+  if [[ -f "$unit" ]] && ! grep -q -- '--metrics' "$unit" 2>/dev/null; then
+    cp "$BASE_DIR/modelos/cloudflared-sdr.service" "$unit" 2>/dev/null \
+      && { systemctl daemon-reload 2>/dev/null; systemctl restart cloudflared-sdr 2>/dev/null; \
+           _fix "Atualizei o túnel para o vigia conseguir monitorá-lo (endereço pode ter mudado)."; }
+  fi
   if systemctl is-active --quiet cloudflared-sdr; then
     local url
     url="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /var/log/cloudflared-sdr.log 2>/dev/null | tail -1 || true)"
@@ -184,6 +193,24 @@ check_exposicao() {
   else
     _fix "Religando o túnel..."; systemctl restart cloudflared-sdr 2>/dev/null
     _bad "Túnel estava parado — religado. Rode o doctor de novo em 1 min para pegar o endereço."
+  fi
+}
+
+# Vigia que detecta a queda do webhook e reconecta sozinho (instala se faltar).
+check_watchdog() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    _chk "Vigia automático: ambiente sem systemd (não aplicável)."
+    return
+  fi
+  if systemctl is-active --quiet hermes-sdr-watchdog.timer 2>/dev/null; then
+    _chk "Vigia automático do webhook ativo (detecta a queda e religa sozinho)."
+  else
+    _fix "Ligando o vigia automático do webhook..."
+    if _instalar_watchdog >/dev/null 2>&1 && systemctl is-active --quiet hermes-sdr-watchdog.timer 2>/dev/null; then
+      _chk "Vigia automático ligado."
+    else
+      _bad "Não consegui ligar o vigia automático do webhook."
+    fi
   fi
 }
 

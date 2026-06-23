@@ -1,0 +1,12 @@
+[Unit]
+Description=Verifica a cada minuto se o webhook do Hermes SDR esta no ar
+
+[Timer]
+# Começa 60s após o boot e repete a cada 60s enquanto a VPS estiver ligada.
+OnBootSec=60
+OnUnitActiveSec=60
+AccuracySec=10s
+Unit=hermes-sdr-watchdog.service
+
+[Install]
+WantedBy=timers.target

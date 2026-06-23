@@ -14,7 +14,7 @@ Abaixo, o que cada situação significa.
 **Quase sempre não é bug.** O Zernio só dispara o webhook para interações de **outra** pessoa. Teste comentando ou mandando DM de **outra conta** do Instagram.
 
 ### "As respostas pararam de funcionar do nada" (instalação nativa)
-O endereço do túnel (Cloudflare) provavelmente **mudou** (a VPS reiniciou). Rode `hermes-sdr doctor`: ele mostra o **endereço novo**. Copie e atualize no painel do Zernio em *Webhooks → seu webhook → Endpoint URL*.
+Antes isso acontecia quando a conexão do túnel (Cloudflare) caía sozinha depois de alguns dias e o serviço ficava parado até reiniciar na mão. **Agora há um vigia automático** (`hermes-sdr-watchdog`) que verifica a cada minuto, **religa o túnel sozinho** e registra tudo em `/var/log/hermes-sdr-webhook.log`. Se o endereço mudar na reconexão, ele **te avisa no Telegram** com o novo endereço para colar no Zernio em *Webhooks → seu webhook → Endpoint URL*. Para ver o histórico: `tail -f /var/log/hermes-sdr-webhook.log`. Se mesmo assim algo persistir, rode `hermes-sdr doctor`.
 
 ### "O bot do Telegram não responde"
 O token pode ter sido revogado no @BotFather. Rode `hermes-sdr` de novo e cole o token atual.

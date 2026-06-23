@@ -10,6 +10,8 @@ passo_exposicao() {
   else
     _exposicao_nativo
   fi
+  # Liga o vigia que detecta a queda do webhook e reconecta sozinho (em ambos os modos).
+  _instalar_watchdog
 }
 
 # ── Docker: labels do Traefik ────────────────────────────────────────────────
@@ -83,9 +85,13 @@ _instalar_cloudflared() {
 
 _instalar_servico_tunel() {
   local unit="/etc/systemd/system/cloudflared-sdr.service"
-  if [[ ! -f "$unit" ]]; then
-    cp "$BASE_DIR/modelos/cloudflared-sdr.service" "$unit"
+  local src="$BASE_DIR/modelos/cloudflared-sdr.service"
+  # Reescreve o unit quando o modelo mudou (idempotente). Garante que instalações
+  # antigas ganhem o --metrics (necessário para o vigia detectar a queda).
+  if [[ ! -f "$unit" ]] || ! cmp -s "$src" "$unit"; then
+    cp "$src" "$unit"
     systemctl daemon-reload
+    nota "Serviço do túnel atualizado."
   fi
   : > /var/log/cloudflared-sdr.log 2>/dev/null || true
   systemctl enable --now cloudflared-sdr >/dev/null 2>&1 || systemctl restart cloudflared-sdr

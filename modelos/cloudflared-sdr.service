@@ -2,10 +2,15 @@
 Description=Cloudflare Tunnel para o webhook do Hermes SDR (porta 8644)
 After=network-online.target
 Wants=network-online.target
+# Nunca desistir de reiniciar, por mais que caia seguidas vezes.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate --url http://localhost:8644 --logfile /var/log/cloudflared-sdr.log
+# --metrics expõe o endpoint /ready (responde 200 só quando há conexão de borda
+# saudável). É o que o vigia (hermes-sdr-watchdog) usa para detectar a queda
+# silenciosa do túnel mesmo com o processo ainda vivo.
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate --metrics 127.0.0.1:20241 --retries 5 --url http://localhost:8644 --logfile /var/log/cloudflared-sdr.log
 Restart=always
 RestartSec=5
 User=root
