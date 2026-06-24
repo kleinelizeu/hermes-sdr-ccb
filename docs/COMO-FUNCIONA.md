@@ -37,9 +37,12 @@ que roda **a cada minuto**. Ele:
 
 1. Faz um *health-check* de verdade do túnel (não só "o processo está vivo?", mas
    "a conexão com a internet está de pé?", via o endpoint `/ready` do cloudflared).
-2. Se detecta a queda, **reconecta sozinho** — sem você precisar fazer nada.
-3. Registra tudo em `/var/log/hermes-sdr-webhook.log` (quando caiu, quando voltou).
-4. Se o endereço mudou na reconexão, ele **te avisa no Telegram** com o endereço
+2. Antes de religar, **confirma a queda duas vezes** (com uma pausa curta). Assim
+   um soluço passageiro — comum quando o cloudflared reconecta a borda sozinho —
+   não dispara um religamento à toa (o que mudaria o endereço sem necessidade).
+3. Se a queda se confirma, ele **reconecta sozinho** — sem você precisar fazer nada.
+4. Registra tudo em `/var/log/hermes-sdr-webhook.log` (quando caiu, quando voltou).
+5. Se o endereço mudou na reconexão, ele **te avisa no Telegram** com o endereço
    novo para colar no Zernio (no modo Docker o endereço é estável, então nem isso
    é preciso).
 

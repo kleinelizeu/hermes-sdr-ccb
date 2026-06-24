@@ -86,15 +86,27 @@ _instalar_cloudflared() {
 _instalar_servico_tunel() {
   local unit="/etc/systemd/system/cloudflared-sdr.service"
   local src="$BASE_DIR/modelos/cloudflared-sdr.service"
+  local mudou=""
   # Reescreve o unit quando o modelo mudou (idempotente). Garante que instalações
   # antigas ganhem o --metrics (necessário para o vigia detectar a queda).
   if [[ ! -f "$unit" ]] || ! cmp -s "$src" "$unit"; then
     cp "$src" "$unit"
     systemctl daemon-reload
+    mudou="1"
     nota "Serviço do túnel atualizado."
   fi
-  : > /var/log/cloudflared-sdr.log 2>/dev/null || true
-  systemctl enable --now cloudflared-sdr >/dev/null 2>&1 || systemctl restart cloudflared-sdr
+  if systemctl is-active --quiet cloudflared-sdr 2>/dev/null; then
+    # Já está rodando: só reinicia (zerando o log) se o unit mudou — um
+    # 'enable --now' NÃO reinicia um serviço ativo, então sem isto o --metrics
+    # novo nunca passaria a valer e o vigia ficaria sem o /ready.
+    if [[ -n "$mudou" ]]; then
+      : > /var/log/cloudflared-sdr.log 2>/dev/null || true
+      systemctl restart cloudflared-sdr 2>/dev/null || true
+    fi
+  else
+    : > /var/log/cloudflared-sdr.log 2>/dev/null || true
+    systemctl enable --now cloudflared-sdr >/dev/null 2>&1 || systemctl restart cloudflared-sdr
+  fi
   ok "Túnel seguro ligado (e religa sozinho se a VPS reiniciar)."
 }
 

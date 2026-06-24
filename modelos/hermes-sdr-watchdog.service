@@ -5,6 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# Tempo de sobra para o ciclo: debounce + espera pós-restart (~até 40s).
+TimeoutStartSec=120
 # O caminho real é injetado pelo instalador (substitui __WATCHDOG_BIN__).
 ExecStart=__WATCHDOG_BIN__
 User=root

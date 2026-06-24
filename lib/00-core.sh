@@ -155,7 +155,10 @@ carregar_estado() {
 salvar_var() {
   local nome="$1" valor="$2"
   printf -v "$nome" '%s' "$valor"
-  local tmp; tmp="$(mktemp)"
+  # Temp NA MESMA pasta do config para que o mv seja um rename atômico (mesmo
+  # filesystem). Como o vigia também grava aqui (a cada mudança de URL), isso
+  # evita que um leitor concorrente pegue um arquivo escrito pela metade.
+  local tmp; tmp="$(mktemp "${ESTADO_CONFIG}.XXXXXX" 2>/dev/null || mktemp)"
   [[ -f "$ESTADO_CONFIG" ]] && grep -v "^${nome}=" "$ESTADO_CONFIG" > "$tmp" 2>/dev/null || true
   printf '%s=%q\n' "$nome" "$valor" >> "$tmp"
   mv "$tmp" "$ESTADO_CONFIG"

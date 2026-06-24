@@ -26,6 +26,7 @@ WD_TUNNEL_LOG="${WD_TUNNEL_LOG:-/var/log/cloudflared-sdr.log}"
 WD_METRICS_URL="${WD_METRICS_URL:-http://127.0.0.1:20241}"
 WD_WAIT_TRIES="${WD_WAIT_TRIES:-15}"   # tentativas após reiniciar antes de desistir do ciclo
 WD_WAIT_SLEEP="${WD_WAIT_SLEEP:-2}"    # segundos entre tentativas
+WD_CONFIRM_SLEEP="${WD_CONFIRM_SLEEP:-3}"  # pausa antes de RECONFIRMAR a queda (debounce)
 
 # ── Log com timestamp (observabilidade) ──────────────────────────────────────
 wd__now() { date '+%Y-%m-%d %H:%M:%S'; }
@@ -47,6 +48,10 @@ wd__ready_ok() {
 
 # Reinicia o túnel (reconexão).
 wd__restart_tunnel() {
+  # Zera o log do cloudflared ANTES de reiniciar: o log é append-only, então sem
+  # isso a recaptura (grep | tail -1) poderia pegar uma URL antiga acumulada de
+  # um boot anterior em vez da nova. Limpando, o tail -1 só vê a URL atual.
+  { : > "$WD_TUNNEL_LOG"; } 2>/dev/null || true
   systemctl restart "$WD_TUNNEL_SVC" 2>/dev/null
 }
 
@@ -117,6 +122,18 @@ wd__tick_docker() {
   return 1
 }
 
+# Túnel saudável: confere só se a URL mudou por baixo dos panos (ex.: o systemd
+# reiniciou o túnel sozinho após um crash → URL nova) e, se mudou, salva e avisa.
+wd__handle_healthy() {
+  local saved="$1" cur
+  cur="$(wd__recapture_url)"
+  if [[ -n "$cur" && -n "$saved" && "$cur" != "$saved" ]]; then
+    wd_log "URL MUDOU (o túnel reiniciou fora do vigia): nova=$cur anterior=$saved"
+    wd__save_url "$cur"
+    wd__notify "$cur"
+  fi
+}
+
 # ── Ciclo principal do vigia ──────────────────────────────────────────────────
 # Retorna 0 quando o webhook está (ou voltou a ficar) saudável; 1 quando não
 # conseguiu recuperar neste ciclo (o timer chama de novo no próximo minuto).
@@ -129,19 +146,24 @@ wd_tick() {
   local saved="${WEBHOOK_URL:-}"
 
   if wd__ready_ok; then
-    # Saudável. Ainda assim, confere se a URL mudou por baixo dos panos
-    # (ex.: o systemd reiniciou o túnel sozinho após um crash → URL nova).
-    local cur; cur="$(wd__recapture_url)"
-    if [[ -n "$cur" && -n "$saved" && "$cur" != "$saved" ]]; then
-      wd_log "URL MUDOU (o túnel reiniciou fora do vigia): nova=$cur anterior=$saved"
-      wd__save_url "$cur"
-      wd__notify "$cur"
-    fi
+    wd__handle_healthy "$saved"
     return 0
   fi
 
-  # ── Queda detectada ──
-  wd_log "QUEDA detectada: o túnel do webhook não está saudável (serviço parado ou conexão de borda caída). Iniciando reconexão automática..."
+  # Debounce: antes de declarar queda (e reiniciar, o que troca a URL à toa),
+  # espera um pouco e RECONFIRMA. Um soluço transitório do /ready — enquanto o
+  # cloudflared reconecta a borda sozinho, logo após o boot, ou num pico de CPU —
+  # não deve disparar um restart desnecessário (que geraria churn de URL e
+  # spam no Telegram). Só agimos se a queda persistir na segunda checagem.
+  wd__sleep "${WD_CONFIRM_SLEEP:-3}"
+  if wd__ready_ok; then
+    wd_log "Soluço transitório no health-check do túnel — recuperou sozinho (cloudflared reconectou a borda). Sem reinício."
+    wd__handle_healthy "$saved"
+    return 0
+  fi
+
+  # ── Queda confirmada (falhou duas checagens seguidas) ──
+  wd_log "QUEDA confirmada: o túnel do webhook não está saudável (serviço parado ou conexão de borda caída). Iniciando reconexão automática..."
   wd__restart_tunnel
 
   local i

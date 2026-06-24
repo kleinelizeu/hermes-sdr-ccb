@@ -62,7 +62,7 @@ assert_eq        "URL salva foi atualizada para a nova"      "$NEXT_URL" "$WEBHO
 assert_eq        "túnel está saudável de novo"               "up" "$READY"
 assert_eq        "avisou no Telegram exatamente 1x"          "1" "$NOTIFY_N"
 assert_eq        "aviso levou a URL nova"                    "$NEXT_URL" "$NOTIFY_URL"
-assert_contains  "log registrou a QUEDA detectada"          "$OUT" "QUEDA detectada"
+assert_contains  "log registrou a QUEDA confirmada"         "$OUT" "QUEDA confirmada"
 assert_contains  "log registrou a RECONEXÃO com URL nova"   "$OUT" "RECONECTADO com URL NOVA"
 
 t_section "Cenário 2: túnel saudável, mas a URL mudou por fora → atualiza e avisa"
@@ -113,6 +113,55 @@ assert_eq        "ciclo ok (rc=0)"                           "0" "$TICK_RC"
 assert_eq        "reiniciou 1x"                              "1" "$RESTART_N"
 assert_eq        "não precisou avisar (URL igual)"          "0" "$NOTIFY_N"
 assert_contains  "log registrou reconexão com a MESMA URL"  "$OUT" "MESMA URL"
+
+t_section "Cenário 6: soluço transitório do /ready → NÃO reinicia, NÃO avisa (debounce)"
+reset_cenario
+WEBHOOK_URL="https://estavel-123.trycloudflare.com/webhooks/zernio"
+NEXT_URL="https://estavel-123.trycloudflare.com/webhooks/zernio"   # URL não mudou
+# /ready falha na 1ª checagem e volta na 2ª (reconfirmação) — exatamente o soluço
+# transitório que NÃO deve disparar restart nem churn de URL.
+PROBE=0
+wd__ready_ok() { PROBE=$((PROBE+1)); [[ "$PROBE" -ge 2 ]]; }
+run_tick
+assert_eq        "ciclo ok sem agir (rc=0)"                  "0" "$TICK_RC"
+assert_eq        "NÃO reiniciou o túnel (era só um soluço)"  "0" "$RESTART_N"
+assert_eq        "NÃO avisou no Telegram (sem churn)"        "0" "$NOTIFY_N"
+assert_contains  "log registrou o soluço transitório"       "$OUT" "transitório"
+assert_not_contains "log NÃO declarou queda confirmada"     "$OUT" "QUEDA confirmada"
+
+t_section "Cenário 7: modo Docker → recupera via container (URL estável, sem aviso)"
+reset_cenario
+MODO="docker"
+DOCK=down
+wd__ready_ok_docker() { [[ "$DOCK" == "up" ]]; }
+wd__restart_docker()  { RESTART_N=$((RESTART_N+1)); DOCK=up; }
+run_tick
+MODO="nativo"   # restaura para os próximos cenários
+assert_eq        "ciclo Docker ok (rc=0)"                    "0" "$TICK_RC"
+assert_eq        "religou o container 1x"                    "1" "$RESTART_N"
+assert_eq        "não avisou no Telegram (URL estável)"      "0" "$NOTIFY_N"
+assert_contains  "log registrou QUEDA (Docker)"             "$OUT" "QUEDA detectada (Docker)"
+assert_contains  "log registrou RECONEXÃO (Docker)"         "$OUT" "RECONECTADO (Docker)"
+
+t_section "Cenário 8: túnel volta só após algumas tentativas → loop espera e recupera"
+reset_cenario
+WEBHOOK_URL="https://antigo-abc.trycloudflare.com/webhooks/zernio"
+NEXT_URL="https://novo-xyz.trycloudflare.com/webhooks/zernio"
+WD_WAIT_TRIES=5
+SLEEP_N=0
+wd__sleep() { SLEEP_N=$((SLEEP_N+1)); }
+# Sequência de saúde: down (1ª), down (debounce), [restart], down, down, up...
+# prova que o loop de espera itera (dorme) antes de recuperar.
+PROBE=0
+wd__ready_ok() { PROBE=$((PROBE+1)); [[ "$PROBE" -ge 5 ]]; }
+wd__restart_tunnel() { RESTART_N=$((RESTART_N+1)); }   # cura via sequência, não no restart
+run_tick
+assert_eq        "ciclo recuperou (rc=0)"                    "0" "$TICK_RC"
+assert_eq        "reiniciou 1x (após confirmar a queda)"     "1" "$RESTART_N"
+assert_eq        "atualizou para a URL nova"                 "$NEXT_URL" "$WEBHOOK_URL"
+assert_eq        "avisou no Telegram 1x"                     "1" "$NOTIFY_N"
+[[ "$SLEEP_N" -ge 2 ]] && assert_eq "loop de espera iterou (dormiu ≥2x: debounce+retry)" "ok" "ok" \
+  || assert_eq "loop de espera iterou (dormiu ≥2x: debounce+retry)" "ok" "dormiu só $SLEEP_N x"
 
 # ── limpeza ───────────────────────────────────────────────────────────────────
 rm -f "$WD_LOG" "${WD_LOG}.out" 2>/dev/null || true

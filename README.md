@@ -73,8 +73,15 @@ Mais detalhes em [docs/COMO-FUNCIONA.md](docs/COMO-FUNCIONA.md) e [docs/PROBLEMA
 
 ## Para quem desenvolve
 
-Rodar a suíte de testes (não precisa de VPS nem de root — usa dublês):
+Rodar a suíte de testes (não precisa de VPS nem de root):
 
 ```bash
 bash tests/run.sh
 ```
+
+São duas camadas:
+- `tests/test_watchdog.sh` — **orquestração** do vigia (com dublês das funções de
+  I/O): prova o fluxo queda → debounce → reconexão → log → aviso, nos dois modos.
+- `tests/test_watchdog_integration.sh` — exercita as funções **reais** de I/O
+  (recaptura da URL do log do cloudflared, health-check `/ready` com `systemctl`/`curl`
+  falsos no PATH, e o `sendMessage` do Telegram), pegando regex/porta/payload errados.

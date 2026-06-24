@@ -11,8 +11,22 @@ for f in "$BASE_DIR"/lib/*.sh; do source "$f"; done
 init_estado 2>/dev/null || true
 carregar_estado
 
-# Localiza o Hermes (define PERFIL_BIN/CONTAINER se necessário para o modo Docker).
-type _localizar_hermes >/dev/null 2>&1 && { _localizar_hermes 2>/dev/null || true; }
+# Nada configurado ainda nesta VPS? Não há o que vigiar — sai quieto.
+if [[ -z "${MODO:-}" ]]; then
+  exit 0
+fi
+
+# Em Docker o NOME do container pode mudar (recriação/upgrade/rename), então o
+# valor salvo na instalação fica obsoleto. Redescobre ao vivo — exatamente como
+# detectar_hermes e check_hermes fazem — em vez de confiar no nome persistido.
+if [[ "${MODO:-}" == "docker" ]] && command -v docker >/dev/null 2>&1; then
+  _c="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -m1 hermes-agent || true)"
+  [[ -n "$_c" ]] && CONTAINER="$_c"
+fi
+
+# Garante o log do vigia com permissão restrita (defesa em profundidade).
+if [[ ! -e "$WD_LOG" ]]; then { : > "$WD_LOG"; } 2>/dev/null || true; fi
+chmod 640 "$WD_LOG" 2>/dev/null || true
 
 wd_tick || true
 exit 0
