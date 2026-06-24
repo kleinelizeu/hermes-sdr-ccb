@@ -140,6 +140,15 @@ wd__zernio_put() {
   [[ "$code" == 2[0-9][0-9] ]]
 }
 
+# DELETE: remove o webhook _id (query param ?id=). Seam. Retorna 0 só com 2xx.
+wd__zernio_delete() {
+  local id="$1" code
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X DELETE \
+    "$WD_ZERNIO_API?id=${id}" \
+    -H "Authorization: Bearer ${ZERNIO_API_KEY:-}" 2>/dev/null || echo 000)"
+  [[ "$code" == 2[0-9][0-9] ]]
+}
+
 # POST: cria o webhook. Imprime o _id criado no stdout. Seam: testes mockam.
 wd__zernio_create() {
   local url="$1" secret="$2" resp
@@ -193,40 +202,74 @@ print(chosen)
 PY
 }
 
-# Atualiza a URL do nosso webhook direto no Zernio, SEM humano. Retorna 0 se OK.
-# Descobre o _id (cacheando em ZERNIO_WEBHOOK_ID) e faz o PUT.
-wd__zernio_sync() {
-  local new_url="$1"
-  [[ -n "${ZERNIO_API_KEY:-}" ]] || return 1
-  local id="${ZERNIO_WEBHOOK_ID:-}"
-  if [[ -z "$id" ]]; then
-    local listjson; listjson="$(wd__zernio_list)" || return 1
-    id="$(wd__zernio_find_id "$listjson" "${WEBHOOK_URL:-}")"
-    [[ -n "$id" ]] || return 1
-    wd__persist ZERNIO_WEBHOOK_ID "$id"
-  fi
-  wd__zernio_put "$id" "$new_url"
+# TODOS os _id dos NOSSOS webhooks (url termina em /webhooks/zernio), um por linha.
+# Função pura (sem rede) → usada pela consolidação para achar os duplicados.
+wd__zernio_find_all_ids() {
+  WD_LIST="$1" python3 - 2>/dev/null <<'PY'
+import json, os, sys
+try:
+    data = json.loads(os.environ.get("WD_LIST") or "")
+except Exception:
+    sys.exit(1)
+items = data if isinstance(data, list) else (
+    data.get("data") or data.get("webhooks") or data.get("settings") or data.get("results") or [])
+if not isinstance(items, list):
+    items = []
+for w in items:
+    if isinstance(w, dict) and str(w.get("url", "")).rstrip("/").endswith("/webhooks/zernio"):
+        wid = w.get("_id") or w.get("id") or ""
+        if wid:
+            print(wid)
+PY
 }
 
-# Garante o webhook no Zernio apontando para a URL atual: atualiza se existe,
-# cria se não existe. Usada pelo wizard (setup sem toque) e pelo doctor.
-# Retorna 0 quando o Zernio ficou apontando para $WEBHOOK_URL.
+# CONSOLIDA o Zernio: garante UM ÚNICO webhook apontando para $url (atualiza o
+# existente ou cria) e APAGA os duplicados (os outros que terminam em
+# /webhooks/zernio). É o coração do "sem toque": mesmo que a URL tenha trocado
+# várias vezes e acumulado webhooks mortos, o resultado é sempre 1 webhook vivo.
+# Retorna 0 se conseguiu deixar o Zernio apontando para $url.
+zernio_consolidar() {
+  local url="$1"
+  [[ -n "${ZERNIO_API_KEY:-}" ]] || return 1
+  local listjson ids keep="" id
+  listjson="$(wd__zernio_list)" || return 1
+  ids="$(wd__zernio_find_all_ids "$listjson")"
+  # Qual manter: o já cacheado (se ainda existe na lista) ou o primeiro encontrado.
+  if [[ -n "${ZERNIO_WEBHOOK_ID:-}" ]] && printf '%s\n' "$ids" | grep -qxF "$ZERNIO_WEBHOOK_ID"; then
+    keep="$ZERNIO_WEBHOOK_ID"
+  else
+    keep="$(printf '%s\n' "$ids" | sed '/^$/d' | head -1)"
+  fi
+  if [[ -z "$keep" ]]; then
+    keep="$(wd__zernio_create "$url" "${WEBHOOK_SECRET:-}")" || return 1
+    [[ -n "$keep" ]] || return 1
+  else
+    wd__zernio_put "$keep" "$url" || return 1
+  fi
+  wd__persist ZERNIO_WEBHOOK_ID "$keep"
+  # Apaga os duplicados (todo o resto que é nosso). Sem subshell (process subst.)
+  # para o contador sobreviver.
+  local apagados=0
+  while IFS= read -r id; do
+    [[ -n "$id" && "$id" != "$keep" ]] || continue
+    if wd__zernio_delete "$id"; then
+      apagados=$((apagados+1))
+      wd_log "Webhook duplicado removido do Zernio: $id"
+    fi
+  done < <(printf '%s\n' "$ids")
+  [[ "$apagados" -gt 0 ]] && wd_log "Consolidação do Zernio: $apagados webhook(s) duplicado(s) removido(s); mantido $keep."
+  return 0
+}
+
+# Atualiza a URL do nosso webhook direto no Zernio, SEM humano (e consolida
+# duplicados). Usada pelo vigia na troca de URL. Retorna 0 se OK.
+wd__zernio_sync() { zernio_consolidar "$1"; }
+
+# Garante o webhook no Zernio apontando para a URL atual (cria se não existe e
+# consolida duplicados). Usada pelo wizard (setup sem toque) e pelo doctor.
 zernio_garantir_webhook() {
   [[ -n "${ZERNIO_API_KEY:-}" && -n "${WEBHOOK_URL:-}" ]] || return 1
-  local listjson id
-  listjson="$(wd__zernio_list)" || return 1
-  id="$(wd__zernio_find_id "$listjson" "$WEBHOOK_URL")"
-  if [[ -n "$id" ]]; then
-    wd__persist ZERNIO_WEBHOOK_ID "$id"
-    wd__zernio_put "$id" "$WEBHOOK_URL"
-    return $?
-  fi
-  # Não existe ainda → cria.
-  local novo
-  novo="$(wd__zernio_create "$WEBHOOK_URL" "${WEBHOOK_SECRET:-}")" || return 1
-  [[ -n "$novo" ]] || return 1
-  wd__persist ZERNIO_WEBHOOK_ID "$novo"
-  return 0
+  zernio_consolidar "$WEBHOOK_URL"
 }
 
 # A URL mudou: salva, tenta atualizar o Zernio sozinho e só cai no aviso manual

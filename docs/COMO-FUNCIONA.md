@@ -51,7 +51,9 @@ que roda **a cada minuto**. Ele:
 > **100% sem toque:** a chave do Zernio (`sk_...`) que o assistente coleta dá
 > acesso à API de webhooks do Zernio. Por isso o assistente já **cria o webhook
 > pra você** no fim da instalação, e o vigia **mantém a Endpoint URL atualizada**
-> a cada mudança — sem você abrir o painel do Zernio.
+> a cada mudança — sem você abrir o painel do Zernio. Ele também **consolida
+> duplicados**: se trocas de URL antigas deixaram vários webhooks no Zernio, o
+> sistema mantém **um só** apontando para a URL viva e apaga o resto.
 
 Para ver o histórico de quedas/reconexões:
 

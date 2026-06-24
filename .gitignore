@@ -4,3 +4,7 @@
 .DS_Store
 __pycache__/
 *.pyc
+
+# Credenciais de VPS de teste — NUNCA versionar/vazar
+.secrets/
+*.creds.json

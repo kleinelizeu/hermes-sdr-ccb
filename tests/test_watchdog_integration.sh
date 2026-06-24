@@ -32,6 +32,8 @@ cat > "$FAKEBIN/curl" <<'FAKE'
 printf '%s\n' "$*" >> "$FAKE_CURL_LOG"
 # PUT (atualização do Zernio) → imprime o http_code (curl usa -w '%{http_code}')
 for a in "$@"; do [[ "$a" == "PUT" ]] && { printf '%s' "${FAKE_PUT_CODE:-200}"; exit 0; }; done
+# DELETE (remoção de duplicado) → imprime o http_code
+for a in "$@"; do [[ "$a" == "DELETE" ]] && { printf '%s' "${FAKE_DELETE_CODE:-200}"; exit 0; }; done
 is_post=0; for a in "$@"; do [[ "$a" == "POST" ]] && is_post=1; done
 for a in "$@"; do
   case "$a" in
@@ -171,6 +173,31 @@ assert_eq      "guardou o _id do webhook criado" "wh_novo" "${ZERNIO_WEBHOOK_ID:
 assert_contains "fez POST para criar o webhook" "$log" "POST"
 export PATH="$ORIG_PATH"
 unset ZERNIO_API_KEY ZERNIO_WEBHOOK_ID FAKE_GET_RESP FAKE_POST_RESP FAKE_PUT_CODE
+
+t_section "wd__zernio_find_all_ids REAL: lista só os NOSSOS webhooks (sufixo /webhooks/zernio)"
+lista3='[{"_id":"keep1","url":"https://a.trycloudflare.com/webhooks/zernio"},{"_id":"dup2","url":"https://b.trycloudflare.com/webhooks/zernio"},{"_id":"other","url":"https://x.com/naonosso"}]'
+assert_eq "achou exatamente 2 webhooks nossos" "2" "$(wd__zernio_find_all_ids "$lista3" | sed '/^$/d' | wc -l | tr -d ' ')"
+assert_contains "inclui keep1" "$(wd__zernio_find_all_ids "$lista3")" "keep1"
+assert_contains "inclui dup2"  "$(wd__zernio_find_all_ids "$lista3")" "dup2"
+assert_not_contains "NÃO inclui o de outro domínio" "$(wd__zernio_find_all_ids "$lista3")" "other"
+
+t_section "zernio_consolidar REAL: atualiza 1, APAGA os duplicados, ignora os de fora"
+export PATH="$FAKEBIN:$ORIG_PATH"
+: > "$FAKE_CURL_LOG"
+unset ZERNIO_WEBHOOK_ID
+ZERNIO_API_KEY="sk_teste"; WEBHOOK_SECRET="seg"
+export FAKE_GET_RESP="$lista3"
+export FAKE_PUT_CODE="200"; export FAKE_DELETE_CODE="200"
+zernio_consolidar "https://novo.trycloudflare.com/webhooks/zernio" && r=0 || r=1
+log="$(cat "$FAKE_CURL_LOG")"
+assert_eq      "consolidar retornou sucesso" "0" "$r"
+assert_eq      "manteve o 1º (keep1) como o webhook oficial" "keep1" "${ZERNIO_WEBHOOK_ID:-}"
+assert_contains "atualizou (PUT) para a URL nova" "$log" "novo.trycloudflare.com"
+assert_contains "APAGOU o duplicado dup2 (DELETE ?id=dup2)" "$log" "id=dup2"
+assert_not_contains "NÃO apagou o webhook de outro domínio (other)" "$log" "id=other"
+assert_not_contains "NÃO apagou o que manteve (keep1)" "$log" "id=keep1"
+export PATH="$ORIG_PATH"
+unset ZERNIO_API_KEY ZERNIO_WEBHOOK_ID FAKE_GET_RESP FAKE_PUT_CODE FAKE_DELETE_CODE
 
 t_section "Invariantes de configuração (porta/serviço batem entre lib e units)"
 unit_tunel="$(cat "$BASE_DIR/modelos/cloudflared-sdr.service")"
