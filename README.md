@@ -65,7 +65,7 @@ sudo bash /opt/hermes-sdr-ccb/instalar.sh
 
 **Testei comentando no meu próprio Instagram e não respondeu.** Isso é normal: o Zernio só dispara para interações de **outra** pessoa. Teste de outra conta.
 
-**As respostas pararam de funcionar.** No modo nativo, um **vigia automático** verifica o webhook a cada minuto e **religa sozinho** se a conexão do túnel cair (registrando tudo em `/var/log/hermes-sdr-webhook.log` e avisando no Telegram se o endereço mudar). Se ainda assim persistir, rode `hermes-sdr doctor`.
+**As respostas pararam de funcionar.** No modo nativo, um **vigia automático** verifica o webhook a cada minuto, **religa sozinho** se a conexão do túnel cair e, se o endereço mudar, **atualiza o Zernio sozinho pela API** — sem você precisar tocar em nada (registrando tudo em `/var/log/hermes-sdr-webhook.log`). Se ainda assim persistir, rode `hermes-sdr doctor`.
 
 Mais detalhes em [docs/COMO-FUNCIONA.md](docs/COMO-FUNCIONA.md) e [docs/PROBLEMAS-COMUNS.md](docs/PROBLEMAS-COMUNS.md).
 
@@ -83,5 +83,6 @@ São duas camadas:
 - `tests/test_watchdog.sh` — **orquestração** do vigia (com dublês das funções de
   I/O): prova o fluxo queda → debounce → reconexão → log → aviso, nos dois modos.
 - `tests/test_watchdog_integration.sh` — exercita as funções **reais** de I/O
-  (recaptura da URL do log do cloudflared, health-check `/ready` com `systemctl`/`curl`
-  falsos no PATH, e o `sendMessage` do Telegram), pegando regex/porta/payload errados.
+  (recaptura da URL do log do cloudflared, health-check `/ready` e a **API do Zernio**
+  — listar/atualizar/criar webhook — com `systemctl`/`curl` falsos no PATH, e o
+  `sendMessage` do Telegram), pegando regex/porta/payload/JSON errados.

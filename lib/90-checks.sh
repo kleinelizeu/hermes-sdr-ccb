@@ -31,6 +31,7 @@ rodar_doctor() {
   check_prompt_raw
   check_exposicao
   check_watchdog
+  check_zernio_webhook
   check_post_assinado
   check_mcp
 
@@ -211,6 +212,18 @@ check_watchdog() {
     else
       _bad "Não consegui ligar o vigia automático do webhook."
     fi
+  fi
+}
+
+# Garante que o webhook no Zernio aponta para a URL atual do túnel (sem toque).
+check_zernio_webhook() {
+  [[ "${MODO:-}" == "nativo" ]] || { return; }   # no Docker a URL é estável
+  [[ -n "${ZERNIO_API_KEY:-}" && -n "${WEBHOOK_URL:-}" ]] || {
+    _chk "Webhook do Zernio (sem API key para conferir automaticamente)."; return; }
+  if zernio_garantir_webhook >/dev/null 2>&1; then
+    _chk "Zernio apontando para a URL atual (mantido automaticamente)."
+  else
+    _fix "Não confirmei o webhook no Zernio via API — confira no painel se as respostas não chegarem."
   fi
 }
 

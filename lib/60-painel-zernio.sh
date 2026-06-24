@@ -3,6 +3,20 @@
 
 passo_painel_zernio() {
   passo "ÚLTIMO AJUSTE NO PAINEL DO ZERNIO"
+
+  # Tentativa SEM TOQUE: cria/atualiza o webhook no Zernio pela API (com a chave
+  # que você já forneceu). Se der certo, você não precisa mexer no painel — e,
+  # se a URL mudar no futuro, o vigia atualiza sozinho.
+  if zernio_garantir_webhook 2>/dev/null; then
+    ok "Configurei o webhook no Zernio automaticamente — você não precisa fazer nada."
+    info "Endereço (Endpoint URL): ${WEBHOOK_URL}"
+    nota "Se a URL mudar no futuro, o vigia atualiza o Zernio sozinho (sem toque)."
+    caixa "Para TESTAR: comente ou mande DM de OUTRA conta do Instagram." \
+          "Da sua própria conta o Zernio não dispara (não é bug)."
+    return 0
+  fi
+
+  dica "Não consegui configurar o Zernio automaticamente — segue o jeito manual (rápido):"
   cat <<'EOT'
   Falta avisar o Zernio para onde mandar os comentários e DMs. É rápido:
 

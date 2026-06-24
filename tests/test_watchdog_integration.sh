@@ -30,11 +30,17 @@ FAKE
 cat > "$FAKEBIN/curl" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FAKE_CURL_LOG"
+# PUT (atualização do Zernio) → imprime o http_code (curl usa -w '%{http_code}')
+for a in "$@"; do [[ "$a" == "PUT" ]] && { printf '%s' "${FAKE_PUT_CODE:-200}"; exit 0; }; done
+is_post=0; for a in "$@"; do [[ "$a" == "POST" ]] && is_post=1; done
 for a in "$@"; do
   case "$a" in
-    */ready) [[ "${FAKE_READY_OK:-1}" == "1" ]] && exit 0 || exit 22 ;;
+    */ready)      [[ "${FAKE_READY_OK:-1}" == "1" ]] && exit 0 || exit 22 ;;
+    *sendMessage) exit 0 ;;                       # Telegram
   esac
 done
+if [[ "$is_post" == "1" ]]; then printf '%s' "${FAKE_POST_RESP:-}"; exit 0; fi
+printf '%s' "${FAKE_GET_RESP:-}"                  # GET (lista de webhooks do Zernio)
 exit 0
 FAKE
 chmod +x "$FAKEBIN/systemctl" "$FAKEBIN/curl"
@@ -112,6 +118,60 @@ assert_contains "incluiu a URL nova na mensagem" "$curlargs" "novo-xyz-999.trycl
 export PATH="$ORIG_PATH"
 
 # ──────────────────────────────────────────────────────────────────────────────
+t_section "wd__zernio_find_id REAL: acha o _id do nosso webhook na lista"
+lista='[{"_id":"a1","url":"https://old-abc.trycloudflare.com/webhooks/zernio"},{"_id":"b2","url":"https://outro.com/hook"}]'
+assert_eq "bate pela URL antiga exata" "a1" \
+  "$(wd__zernio_find_id "$lista" "https://old-abc.trycloudflare.com/webhooks/zernio")"
+assert_eq "URL antiga não está na lista → cai no sufixo /webhooks/zernio" "a1" \
+  "$(wd__zernio_find_id "$lista" "https://sumiu.trycloudflare.com/webhooks/zernio")"
+wrap='{"data":[{"id":"x9","url":"https://z.trycloudflare.com/webhooks/zernio"}]}'
+assert_eq "entende resposta embrulhada em {data:[...]} e campo id" "x9" \
+  "$(wd__zernio_find_id "$wrap" "")"
+none='[{"_id":"c3","url":"https://nada.com/outro"}]'
+assert_eq "nenhum webhook nosso → vazio" "" "$(wd__zernio_find_id "$none" "")"
+
+t_section "wd__zernio_extract_id REAL: pega o _id da resposta de criação"
+assert_eq "objeto direto" "new123" "$(printf '{\"_id\":\"new123\",\"url\":\"x\"}' | wd__zernio_extract_id)"
+assert_eq "embrulhado em data" "d7" "$(printf '{\"data\":{\"_id\":\"d7\"}}' | wd__zernio_extract_id)"
+assert_eq "resposta inválida → vazio" "" "$(printf 'nao-e-json' | wd__zernio_extract_id)"
+
+t_section "wd__zernio_sync REAL: descobre o _id (GET), atualiza (PUT) e cacheia"
+export PATH="$FAKEBIN:$ORIG_PATH"
+: > "$FAKE_CURL_LOG"
+unset ZERNIO_WEBHOOK_ID
+ZERNIO_API_KEY="sk_teste"
+WEBHOOK_URL="https://old-abc.trycloudflare.com/webhooks/zernio"
+export FAKE_GET_RESP='[{"_id":"wh_42","url":"https://old-abc.trycloudflare.com/webhooks/zernio"}]'
+export FAKE_PUT_CODE="200"
+wd__zernio_sync "https://novo-xyz.trycloudflare.com/webhooks/zernio" && r=0 || r=1
+log="$(cat "$FAKE_CURL_LOG")"
+assert_eq      "sync retornou sucesso" "0" "$r"
+assert_eq      "cacheou o _id descoberto em ZERNIO_WEBHOOK_ID" "wh_42" "${ZERNIO_WEBHOOK_ID:-}"
+assert_contains "fez PUT no endpoint de webhooks do Zernio" "$log" "PUT"
+assert_contains "PUT levou a URL NOVA" "$log" "novo-xyz.trycloudflare.com"
+assert_contains "usou o Authorization Bearer com a chave" "$log" "Bearer sk_teste"
+
+t_section "wd__zernio_sync REAL: sem API key → falha de cara (fallback p/ Telegram)"
+unset ZERNIO_API_KEY ZERNIO_WEBHOOK_ID
+: > "$FAKE_CURL_LOG"
+wd__zernio_sync "https://qualquer.trycloudflare.com/webhooks/zernio" && r=0 || r=1
+assert_eq "sem chave → retorna falha" "1" "$r"
+assert_eq "sem chave → nem chamou a API (curl não foi usado)" "" "$(cat "$FAKE_CURL_LOG")"
+
+t_section "zernio_garantir_webhook REAL: cria quando não existe"
+: > "$FAKE_CURL_LOG"
+unset ZERNIO_WEBHOOK_ID
+ZERNIO_API_KEY="sk_teste"; WEBHOOK_URL="https://novo.trycloudflare.com/webhooks/zernio"; WEBHOOK_SECRET="segredo123"
+export FAKE_GET_RESP='[]'                       # nenhum webhook ainda
+export FAKE_POST_RESP='{"_id":"wh_novo"}'
+zernio_garantir_webhook && r=0 || r=1
+log="$(cat "$FAKE_CURL_LOG")"
+assert_eq      "garantir retornou sucesso" "0" "$r"
+assert_eq      "guardou o _id do webhook criado" "wh_novo" "${ZERNIO_WEBHOOK_ID:-}"
+assert_contains "fez POST para criar o webhook" "$log" "POST"
+export PATH="$ORIG_PATH"
+unset ZERNIO_API_KEY ZERNIO_WEBHOOK_ID FAKE_GET_RESP FAKE_POST_RESP FAKE_PUT_CODE
+
 t_section "Invariantes de configuração (porta/serviço batem entre lib e units)"
 unit_tunel="$(cat "$BASE_DIR/modelos/cloudflared-sdr.service")"
 lib_src="$(cat "$BASE_DIR/lib/45-watchdog.sh")"

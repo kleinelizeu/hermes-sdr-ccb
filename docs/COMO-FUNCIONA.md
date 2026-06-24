@@ -42,9 +42,16 @@ que roda **a cada minuto**. Ele:
    não dispara um religamento à toa (o que mudaria o endereço sem necessidade).
 3. Se a queda se confirma, ele **reconecta sozinho** — sem você precisar fazer nada.
 4. Registra tudo em `/var/log/hermes-sdr-webhook.log` (quando caiu, quando voltou).
-5. Se o endereço mudou na reconexão, ele **te avisa no Telegram** com o endereço
-   novo para colar no Zernio (no modo Docker o endereço é estável, então nem isso
-   é preciso).
+5. Se o endereço mudou na reconexão, ele **atualiza o Zernio sozinho pela API**
+   (com a chave que você já cadastrou), trocando a Endpoint URL e reativando o
+   webhook se o Zernio o tiver desativado. **Você não precisa fazer nada** —
+   nem no modo nativo. (No Docker o endereço já é estável.) Só se a API do Zernio
+   estiver fora é que ele cai no plano B: te avisa no Telegram para colar na mão.
+
+> **100% sem toque:** a chave do Zernio (`sk_...`) que o assistente coleta dá
+> acesso à API de webhooks do Zernio. Por isso o assistente já **cria o webhook
+> pra você** no fim da instalação, e o vigia **mantém a Endpoint URL atualizada**
+> a cada mudança — sem você abrir o painel do Zernio.
 
 Para ver o histórico de quedas/reconexões:
 

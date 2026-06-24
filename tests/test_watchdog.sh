@@ -31,12 +31,16 @@ NEXT_URL=""         # URL que o log do túnel "mostra" ao recapturar
 # Reseta tudo e redefine os seams para o padrão controlado.
 reset_cenario() {
   READY="up"; RESTART_N=0; NOTIFY_N=0; NOTIFY_URL=""; NEXT_URL=""
+  ZSYNC_N=0; NOTIFY_OK_N=0; ZSYNC_RC=1   # por padrão a API do Zernio "falha" → fallback manual
+  unset ZERNIO_API_KEY ZERNIO_WEBHOOK_ID 2>/dev/null || true
   : > "$WD_LOG"
   WD_WAIT_TRIES=5
 
   wd__ready_ok()       { [[ "$READY" == "up" ]]; }
   wd__restart_tunnel() { RESTART_N=$((RESTART_N+1)); }   # por padrão NÃO cura
   wd__recapture_url()  { [[ -n "$NEXT_URL" ]] && printf '%s' "$NEXT_URL"; }
+  wd__zernio_sync()    { ZSYNC_N=$((ZSYNC_N+1)); return "${ZSYNC_RC:-1}"; }
+  wd__notify_ok()      { NOTIFY_OK_N=$((NOTIFY_OK_N+1)); NOTIFY_URL="$1"; }
   wd__notify()         { NOTIFY_N=$((NOTIFY_N+1)); NOTIFY_URL="$1"; }
   wd__sleep()          { :; }
 }
@@ -162,6 +166,35 @@ assert_eq        "atualizou para a URL nova"                 "$NEXT_URL" "$WEBHO
 assert_eq        "avisou no Telegram 1x"                     "1" "$NOTIFY_N"
 [[ "$SLEEP_N" -ge 2 ]] && assert_eq "loop de espera iterou (dormiu ≥2x: debounce+retry)" "ok" "ok" \
   || assert_eq "loop de espera iterou (dormiu ≥2x: debounce+retry)" "ok" "dormiu só $SLEEP_N x"
+
+t_section "Cenário 9: URL nova + Zernio OK → atualiza sozinho, SEM pedir nada ao humano"
+reset_cenario
+WEBHOOK_URL="https://antigo-abc.trycloudflare.com/webhooks/zernio"
+READY="down"
+wd__restart_tunnel() { RESTART_N=$((RESTART_N+1)); READY="up"; }
+NEXT_URL="https://novo-xyz.trycloudflare.com/webhooks/zernio"
+ZSYNC_RC=0   # a API do Zernio aceitou a atualização
+run_tick
+assert_eq        "ciclo ok (rc=0)"                           "0" "$TICK_RC"
+assert_eq        "tentou atualizar o Zernio via API"         "1" "$ZSYNC_N"
+assert_eq        "URL salva atualizada"                      "$NEXT_URL" "$WEBHOOK_URL"
+assert_eq        "NÃO pediu pro humano colar (sem aviso manual)" "0" "$NOTIFY_N"
+assert_eq        "mandou só o aviso informativo (já atualizei)"  "1" "$NOTIFY_OK_N"
+assert_contains  "log diz que atualizou o Zernio sozinho"   "$OUT" "Zernio ATUALIZADO automaticamente"
+
+t_section "Cenário 10: URL nova + API do Zernio fora → cai no aviso manual (fallback)"
+reset_cenario
+WEBHOOK_URL="https://antigo-abc.trycloudflare.com/webhooks/zernio"
+READY="down"
+wd__restart_tunnel() { RESTART_N=$((RESTART_N+1)); READY="up"; }
+NEXT_URL="https://novo-xyz.trycloudflare.com/webhooks/zernio"
+ZSYNC_RC=1   # a API do Zernio falhou
+run_tick
+assert_eq        "ciclo ok (rc=0)"                           "0" "$TICK_RC"
+assert_eq        "tentou atualizar o Zernio via API"         "1" "$ZSYNC_N"
+assert_eq        "caiu no aviso manual do Telegram"          "1" "$NOTIFY_N"
+assert_eq        "não mandou o aviso informativo"            "0" "$NOTIFY_OK_N"
+assert_contains  "log registrou o fallback"                 "$OUT" "Não atualizei o Zernio sozinho"
 
 # ── limpeza ───────────────────────────────────────────────────────────────────
 rm -f "$WD_LOG" "${WD_LOG}.out" 2>/dev/null || true

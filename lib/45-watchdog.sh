@@ -14,10 +14,17 @@
 #   Solução: um vigia que roda a cada minuto, faz um HEALTH-CHECK de verdade do túnel
 #   (endpoint /ready das métricas do cloudflared, que só responde 200 quando há
 #   conexão de borda saudável), e quando detecta a queda RECONECTA sozinho, recaptura
-#   a URL nova, registra tudo em log e avisa no Telegram se a URL mudou.
+#   a URL nova e — no modo nativo — ATUALIZA O ZERNIO SOZINHO via API (sem humano).
+#
+#   100% SEM TOQUE: quando a URL muda, o vigia chama a API do Zernio
+#   (PUT /v1/webhooks/settings) e troca a Endpoint URL automaticamente, inclusive
+#   reativando o webhook caso o Zernio o tenha desativado (ele desativa após 10
+#   falhas seguidas de entrega). Só cai no aviso por Telegram (colar na mão) se a
+#   API falhar — então o comportamento nunca fica PIOR do que era antes.
 #
 # Projetado para ser TESTÁVEL: toda dependência externa (systemctl, curl, relógio,
-# Telegram) está isolada em funções "seam" wd__* que os testes sobrescrevem.
+# Telegram, API do Zernio) está isolada em funções "seam" wd__* que os testes
+# sobrescrevem.
 
 # ── Configuração (sobrescrevível por env, útil nos testes) ────────────────────
 WD_LOG="${WD_LOG:-/var/log/hermes-sdr-webhook.log}"
@@ -27,6 +34,7 @@ WD_METRICS_URL="${WD_METRICS_URL:-http://127.0.0.1:20241}"
 WD_WAIT_TRIES="${WD_WAIT_TRIES:-15}"   # tentativas após reiniciar antes de desistir do ciclo
 WD_WAIT_SLEEP="${WD_WAIT_SLEEP:-2}"    # segundos entre tentativas
 WD_CONFIRM_SLEEP="${WD_CONFIRM_SLEEP:-3}"  # pausa antes de RECONFIRMAR a queda (debounce)
+WD_ZERNIO_API="${WD_ZERNIO_API:-https://zernio.com/api/v1/webhooks/settings}"  # endpoint de webhooks
 
 # ── Log com timestamp (observabilidade) ──────────────────────────────────────
 wd__now() { date '+%Y-%m-%d %H:%M:%S'; }
@@ -62,20 +70,37 @@ wd__recapture_url() {
   [[ -n "$base" ]] && printf '%s/webhooks/zernio' "$base"
 }
 
-# Persiste a nova URL no estado (salvar_var vem do 00-core.sh).
-wd__save_url() {
+# Persiste uma variável no estado (salvar_var vem do 00-core.sh).
+wd__persist() {
   if type salvar_var >/dev/null 2>&1; then
-    salvar_var WEBHOOK_URL "$1"
+    salvar_var "$1" "$2"
   else
-    printf -v WEBHOOK_URL '%s' "$1"
+    printf -v "$1" '%s' "$2"
   fi
 }
+
+# Persiste a nova URL pública no estado.
+wd__save_url() { wd__persist WEBHOOK_URL "$1"; }
 
 # Espera (isolado para os testes não dormirem de verdade).
 wd__sleep() { sleep "${1:-2}"; }
 
-# Avisa no Telegram que a URL mudou (a única parte que precisa de um humano:
-# colar a URL nova no painel do Zernio). Sem token/chat configurados, só registra.
+# Aviso amistoso (FALLBACK NÃO foi preciso): a URL mudou e o vigia já atualizou
+# o Zernio sozinho — o usuário não precisa fazer nada. Apenas informativo.
+wd__notify_ok() {
+  local url="$1"
+  [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]] || return 0
+  local texto="✅ O endereço do seu webhook mudou e eu JÁ ATUALIZEI no Zernio automaticamente. Você não precisa fazer nada.
+
+Novo endereço:
+${url}"
+  curl -s --max-time 10 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+    --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+    --data-urlencode "text=${texto}" >/dev/null 2>&1 || true
+}
+
+# Aviso de FALLBACK: só usado quando o update automático no Zernio NÃO deu certo.
+# Aí sim pede para o humano colar a URL nova no painel. Sem Telegram, só registra.
 wd__notify() {
   local url="$1"
   if [[ -z "${TELEGRAM_BOT_TOKEN:-}" || -z "${TELEGRAM_CHAT_ID:-}" ]]; then
@@ -83,7 +108,7 @@ wd__notify() {
     return 0
   fi
   local texto
-  texto="⚠️ O endereço do seu webhook MUDOU (o túnel reconectou sozinho).
+  texto="⚠️ O endereço do seu webhook MUDOU e NÃO consegui atualizar no Zernio sozinho.
 
 Novo endereço:
 ${url}
@@ -92,6 +117,132 @@ Atualize no painel do Zernio: Webhooks → seu webhook → Endpoint URL."
   curl -s --max-time 10 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
     --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
     --data-urlencode "text=${texto}" >/dev/null 2>&1 || true
+}
+
+# ── Integração com a API do Zernio (atualização automática da Endpoint URL) ───
+# Doc: base https://zernio.com/api/v1 · Bearer sk_ · /v1/webhooks/settings
+#   GET  lista os webhooks · PUT atualiza (body {_id,url,isActive}) · POST cria.
+
+# GET da lista de webhooks (JSON cru no stdout). Seam: testes mockam.
+wd__zernio_list() {
+  curl -fsS --max-time 15 -H "Authorization: Bearer ${ZERNIO_API_KEY:-}" \
+    "$WD_ZERNIO_API" 2>/dev/null
+}
+
+# PUT: troca a url do webhook _id e o reativa (isActive). Seam: testes mockam.
+# Retorna 0 só com HTTP 2xx.
+wd__zernio_put() {
+  local id="$1" url="$2" body code
+  body="$(WD_ID="$id" WD_URL="$url" python3 -c 'import json,os; print(json.dumps({"_id":os.environ["WD_ID"],"url":os.environ["WD_URL"],"isActive":True}))' 2>/dev/null)" || return 1
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X PUT "$WD_ZERNIO_API" \
+    -H "Authorization: Bearer ${ZERNIO_API_KEY:-}" -H "Content-Type: application/json" \
+    -d "$body" 2>/dev/null || echo 000)"
+  [[ "$code" == 2[0-9][0-9] ]]
+}
+
+# POST: cria o webhook. Imprime o _id criado no stdout. Seam: testes mockam.
+wd__zernio_create() {
+  local url="$1" secret="$2" resp
+  local body
+  body="$(WD_URL="$url" WD_SECRET="$secret" python3 -c 'import json,os; print(json.dumps({"name":"Hermes SDR","url":os.environ["WD_URL"],"events":["message.received","comment.received"],"secret":os.environ.get("WD_SECRET") or "","isActive":True}))' 2>/dev/null)" || return 1
+  resp="$(curl -fsS --max-time 15 -X POST "$WD_ZERNIO_API" \
+    -H "Authorization: Bearer ${ZERNIO_API_KEY:-}" -H "Content-Type: application/json" \
+    -d "$body" 2>/dev/null)" || return 1
+  printf '%s' "$resp" | wd__zernio_extract_id
+}
+
+# Extrai o _id de uma resposta JSON (objeto direto, {data:{...}} etc). Lê do
+# stdin. Usa `python3 -c` (não heredoc) para o stdin continuar sendo o pipe.
+wd__zernio_extract_id() {
+  python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+def wid(w):
+    return (w.get("_id") or w.get("id") or "") if isinstance(w,dict) else ""
+print((wid(d) or wid(d.get("data")) or wid(d.get("webhook")) or wid(d.get("settings"))) if isinstance(d,dict) else "")' 2>/dev/null
+}
+
+# Acha o _id do NOSSO webhook na lista (o que bate com a URL antiga; senão o que
+# termina em /webhooks/zernio). Função pura (sem rede) → fácil de testar.
+wd__zernio_find_id() {
+  local listjson="$1" old="$2"
+  WD_LIST="$listjson" WD_OLD="$old" python3 - 2>/dev/null <<'PY'
+import json, os, sys
+raw = os.environ.get("WD_LIST") or ""
+try:
+    data = json.loads(raw)
+except Exception:
+    sys.exit(1)
+items = data if isinstance(data, list) else (
+    data.get("data") or data.get("webhooks") or data.get("settings") or data.get("results") or [])
+if not isinstance(items, list):
+    items = []
+old = os.environ.get("WD_OLD", "")
+def wid(w): return w.get("_id") or w.get("id") or ""
+chosen = ""
+for w in items:                       # 1) bate exatamente com a URL antiga
+    if isinstance(w, dict) and old and w.get("url") == old:
+        chosen = wid(w); break
+if not chosen:                        # 2) termina em /webhooks/zernio (o nosso padrão)
+    for w in items:
+        if isinstance(w, dict) and str(w.get("url", "")).rstrip("/").endswith("/webhooks/zernio"):
+            chosen = wid(w); break
+print(chosen)
+PY
+}
+
+# Atualiza a URL do nosso webhook direto no Zernio, SEM humano. Retorna 0 se OK.
+# Descobre o _id (cacheando em ZERNIO_WEBHOOK_ID) e faz o PUT.
+wd__zernio_sync() {
+  local new_url="$1"
+  [[ -n "${ZERNIO_API_KEY:-}" ]] || return 1
+  local id="${ZERNIO_WEBHOOK_ID:-}"
+  if [[ -z "$id" ]]; then
+    local listjson; listjson="$(wd__zernio_list)" || return 1
+    id="$(wd__zernio_find_id "$listjson" "${WEBHOOK_URL:-}")"
+    [[ -n "$id" ]] || return 1
+    wd__persist ZERNIO_WEBHOOK_ID "$id"
+  fi
+  wd__zernio_put "$id" "$new_url"
+}
+
+# Garante o webhook no Zernio apontando para a URL atual: atualiza se existe,
+# cria se não existe. Usada pelo wizard (setup sem toque) e pelo doctor.
+# Retorna 0 quando o Zernio ficou apontando para $WEBHOOK_URL.
+zernio_garantir_webhook() {
+  [[ -n "${ZERNIO_API_KEY:-}" && -n "${WEBHOOK_URL:-}" ]] || return 1
+  local listjson id
+  listjson="$(wd__zernio_list)" || return 1
+  id="$(wd__zernio_find_id "$listjson" "$WEBHOOK_URL")"
+  if [[ -n "$id" ]]; then
+    wd__persist ZERNIO_WEBHOOK_ID "$id"
+    wd__zernio_put "$id" "$WEBHOOK_URL"
+    return $?
+  fi
+  # Não existe ainda → cria.
+  local novo
+  novo="$(wd__zernio_create "$WEBHOOK_URL" "${WEBHOOK_SECRET:-}")" || return 1
+  [[ -n "$novo" ]] || return 1
+  wd__persist ZERNIO_WEBHOOK_ID "$novo"
+  return 0
+}
+
+# A URL mudou: salva, tenta atualizar o Zernio sozinho e só cai no aviso manual
+# (Telegram) se a API falhar. WEBHOOK_URL (antigo) é lido por wd__zernio_sync
+# para achar o _id ANTES de sobrescrevermos com a URL nova.
+wd__on_url_change() {
+  local new_url="$1"
+  if wd__zernio_sync "$new_url"; then
+    wd__save_url "$new_url"
+    wd_log "Zernio ATUALIZADO automaticamente para a URL nova: $new_url (sem intervenção humana)."
+    wd__notify_ok "$new_url"
+  else
+    wd__save_url "$new_url"
+    wd_log "Não atualizei o Zernio sozinho (sem API key / webhook não encontrado / API fora) — avisando no Telegram para colar na mão."
+    wd__notify "$new_url"
+  fi
 }
 
 # ── Health-check do modo Docker (URL é estável via Traefik) ───────────────────
@@ -129,8 +280,7 @@ wd__handle_healthy() {
   cur="$(wd__recapture_url)"
   if [[ -n "$cur" && -n "$saved" && "$cur" != "$saved" ]]; then
     wd_log "URL MUDOU (o túnel reiniciou fora do vigia): nova=$cur anterior=$saved"
-    wd__save_url "$cur"
-    wd__notify "$cur"
+    wd__on_url_change "$cur"
   fi
 }
 
@@ -184,9 +334,8 @@ wd_tick() {
   fi
 
   if [[ "$cur" != "$saved" ]]; then
-    wd__save_url "$cur"
-    wd_log "RECONECTADO com URL NOVA: $cur (anterior: ${saved:-nenhuma}). Avisando no Telegram para atualizar no Zernio."
-    wd__notify "$cur"
+    wd_log "RECONECTADO com URL NOVA: $cur (anterior: ${saved:-nenhuma}). Atualizando o Zernio..."
+    wd__on_url_change "$cur"
   else
     wd_log "RECONECTADO com a MESMA URL: $cur. Nada a atualizar no Zernio."
   fi
